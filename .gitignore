@@ -1,0 +1,19 @@
+# Environment
+.env
+
+# Internal assistant files
+CLAUDE.md
+.claude
+
+#cache
+.gocache
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# OS
+.DS_Store
+
+# Internal docs
+docs/
