@@ -231,6 +231,14 @@ reversal) is fetched and returned.
 
 Layer 2 reduces unnecessary load. Layer 3 is the guarantee.
 
+### Reversals Are Terminal
+
+Once T1 has been reversed by T2, T2 itself cannot be reversed. The reversal
+service rejects any request whose target has `reversed_by` set (i.e., the
+target is itself a reversal). The frontend hides the Reverse button on
+those rows so the affordance matches the rule. To re-apply the original
+effect, initiate a new transfer.
+
 ### What a Reversal Looks Like
 
 Original transfer T1: Alice → Bob ₹500
@@ -289,6 +297,10 @@ POST /transfers/:id/reverse          reverse a completed transfer
 GET  /audit-log                      list audit entries (paginated)
 GET  /ledger-entries?account_id=X    list ledger entries for an account
 ```
+
+List endpoints (`/transfers`, `/audit-log`, `/ledger-entries`) accept
+`?limit=` (default 100, max 500) and `?offset=` (default 0). Values outside
+these bounds are silently clamped.
 
 Amount is always sent as a JSON string (`"amount": "500.00"`) to avoid float64
 precision loss at the HTTP boundary.
@@ -352,7 +364,16 @@ auditability is a first-class requirement.
 - No authentication or authorization
 - Mobile number is optional free text in this assignment; no uniqueness or format
   validation is enforced
-- Insufficient-funds failures are audited; malformed requests and missing-account
-  validation errors are rejected before creating transfer/audit rows
+- Pre-transaction validation failures (same source/destination, non-positive
+  amount, unknown account) are rejected before any transfer or audit row is
+  written. Insufficient funds is the one failure case that **is** persisted as
+  both a `FAILED` transfer row and an audit row, because by that point the
+  attempt is well-formed enough to deserve a permanent record.
+- Reversal of a reversal is **not** permitted. Once T1 has been reversed by T2,
+  T2 itself is terminal. To re-apply the original effect, initiate a new
+  transfer. Rationale: real banking convention, ambiguous user intent for
+  "reverse a reversal", and a cleaner data model with no chains.
+- No time window on reversals — a completed transfer can be reversed at any
+  later time. A real bank would typically impose a void window.
 - Amount is accepted as a string in the API to avoid float64 precision loss
 - Account names are not required to be unique (two customers can have the same name)

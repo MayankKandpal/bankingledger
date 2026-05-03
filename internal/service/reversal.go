@@ -9,8 +9,9 @@ import (
 )
 
 var (
-	ErrTransferNotFound    = errors.New("transfer not found")
-	ErrCannotReverseFailed = errors.New("cannot reverse a failed transfer")
+	ErrTransferNotFound      = errors.New("transfer not found")
+	ErrCannotReverseFailed   = errors.New("cannot reverse a failed transfer")
+	ErrCannotReverseReversal = errors.New("cannot reverse a reversal transfer")
 )
 
 type ReversalService struct {
@@ -25,6 +26,14 @@ func (s *ReversalService) Execute(originalID string) (models.Transfer, error) {
 			return models.Transfer{}, ErrTransferNotFound
 		}
 		return models.Transfer{}, err
+	}
+
+	// A reversal is terminal — refuse to reverse a transfer that is itself a reversal.
+	// This check fires before the REVERSED-status check on purpose: a reversal that has
+	// itself been reversed has both reversed_by != nil AND status == REVERSED, and we
+	// want to reject it explicitly rather than return a chain link as an idempotent hit.
+	if t1.ReversedBy != nil {
+		return models.Transfer{}, ErrCannotReverseReversal
 	}
 
 	// 2 & 3. Status guards

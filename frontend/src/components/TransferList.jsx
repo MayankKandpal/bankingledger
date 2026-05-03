@@ -78,7 +78,7 @@ export default function TransferList({ transfers, accounts, onRefresh }) {
                   <td>₹{t.amount}</td>
                   <td><Badge status={t.status} /></td>
                   <td>
-                    {t.status === 'COMPLETED' && (
+                    {t.status === 'COMPLETED' && !t.reversed_by && (
                       <button className="reverse" onClick={() => handleReverse(t.id)}>
                         Reverse
                       </button>

@@ -99,7 +99,8 @@ func (h *TransferHandler) Reverse(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, service.ErrTransferNotFound):
 			writeError(w, err.Error(), http.StatusNotFound)
-		case errors.Is(err, service.ErrCannotReverseFailed):
+		case errors.Is(err, service.ErrCannotReverseFailed),
+			errors.Is(err, service.ErrCannotReverseReversal):
 			writeError(w, err.Error(), http.StatusUnprocessableEntity)
 		default:
 			writeError(w, "internal error", http.StatusInternalServerError)
