@@ -15,14 +15,15 @@ type Account struct {
 }
 
 type Transfer struct {
-	ID            string          `json:"id"`
-	FromAccountID string          `json:"from_account_id"`
-	ToAccountID   string          `json:"to_account_id"`
-	Amount        decimal.Decimal `json:"amount"`
-	Status        string          `json:"status"`
-	FailureReason *string         `json:"failure_reason,omitempty"`
-	ReversedBy    *string         `json:"reversed_by,omitempty"`
-	CreatedAt     time.Time       `json:"created_at"`
+	ID            string           `json:"id"`
+	FromAccountID string           `json:"from_account_id"`
+	ToAccountID   string           `json:"to_account_id"`
+	Amount        decimal.Decimal  `json:"amount"`
+	Fee           *decimal.Decimal `json:"fee,omitempty"`
+	Status        string           `json:"status"`
+	FailureReason *string          `json:"failure_reason,omitempty"`
+	ReversedBy    *string          `json:"reversed_by,omitempty"`
+	CreatedAt     time.Time        `json:"created_at"`
 }
 
 type LedgerEntry struct {

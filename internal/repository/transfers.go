@@ -33,20 +33,24 @@ func GetAccountForUpdate(tx *sql.Tx, id string) (models.Account, error) {
 	return a, err
 }
 
-func InsertTransfer(tx *sql.Tx, fromID, toID string, amount decimal.Decimal, status string, failureReason *string) (models.Transfer, error) {
+func InsertTransfer(tx *sql.Tx, fromID, toID string, amount decimal.Decimal, status string, failureReason *string, fee *decimal.Decimal) (models.Transfer, error) {
 	var t models.Transfer
 	var fr, rb sql.NullString
+	var feeNull decimal.NullDecimal
 	err := tx.QueryRow(`
-		INSERT INTO transfers (from_account_id, to_account_id, amount, status, failure_reason)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, from_account_id, to_account_id, amount, status, failure_reason, reversed_by, created_at`,
-		fromID, toID, amount, status, failureReason,
-	).Scan(&t.ID, &t.FromAccountID, &t.ToAccountID, &t.Amount, &t.Status, &fr, &rb, &t.CreatedAt)
+		INSERT INTO transfers (from_account_id, to_account_id, amount, status, failure_reason, fee)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, from_account_id, to_account_id, amount, status, failure_reason, reversed_by, fee, created_at`,
+		fromID, toID, amount, status, failureReason, fee,
+	).Scan(&t.ID, &t.FromAccountID, &t.ToAccountID, &t.Amount, &t.Status, &fr, &rb, &feeNull, &t.CreatedAt)
 	if fr.Valid {
 		t.FailureReason = &fr.String
 	}
 	if rb.Valid {
 		t.ReversedBy = &rb.String
+	}
+	if feeNull.Valid {
+		t.Fee = &feeNull.Decimal
 	}
 	return t, err
 }
@@ -79,7 +83,7 @@ func InsertAuditLog(tx *sql.Tx, transferID *string, operation, fromID, toID stri
 
 func ListTransfers(db *sql.DB, limit, offset int) ([]models.Transfer, error) {
 	rows, err := db.Query(`
-		SELECT id, from_account_id, to_account_id, amount, status, failure_reason, reversed_by, created_at
+		SELECT id, from_account_id, to_account_id, amount, status, failure_reason, reversed_by, fee, created_at
 		FROM transfers
 		ORDER BY created_at DESC
 		LIMIT $1 OFFSET $2`, limit, offset)
@@ -92,7 +96,8 @@ func ListTransfers(db *sql.DB, limit, offset int) ([]models.Transfer, error) {
 	for rows.Next() {
 		var t models.Transfer
 		var fr, rb sql.NullString
-		if err := rows.Scan(&t.ID, &t.FromAccountID, &t.ToAccountID, &t.Amount, &t.Status, &fr, &rb, &t.CreatedAt); err != nil {
+		var feeNull decimal.NullDecimal
+		if err := rows.Scan(&t.ID, &t.FromAccountID, &t.ToAccountID, &t.Amount, &t.Status, &fr, &rb, &feeNull, &t.CreatedAt); err != nil {
 			return nil, err
 		}
 		if fr.Valid {
@@ -100,6 +105,9 @@ func ListTransfers(db *sql.DB, limit, offset int) ([]models.Transfer, error) {
 		}
 		if rb.Valid {
 			t.ReversedBy = &rb.String
+		}
+		if feeNull.Valid {
+			t.Fee = &feeNull.Decimal
 		}
 		transfers = append(transfers, t)
 	}
@@ -109,16 +117,20 @@ func ListTransfers(db *sql.DB, limit, offset int) ([]models.Transfer, error) {
 func GetTransferByID(db *sql.DB, id string) (models.Transfer, error) {
 	var t models.Transfer
 	var fr, rb sql.NullString
+	var feeNull decimal.NullDecimal
 	err := db.QueryRow(`
-		SELECT id, from_account_id, to_account_id, amount, status, failure_reason, reversed_by, created_at
+		SELECT id, from_account_id, to_account_id, amount, status, failure_reason, reversed_by, fee, created_at
 		FROM transfers
 		WHERE id = $1`, id,
-	).Scan(&t.ID, &t.FromAccountID, &t.ToAccountID, &t.Amount, &t.Status, &fr, &rb, &t.CreatedAt)
+	).Scan(&t.ID, &t.FromAccountID, &t.ToAccountID, &t.Amount, &t.Status, &fr, &rb, &feeNull, &t.CreatedAt)
 	if fr.Valid {
 		t.FailureReason = &fr.String
 	}
 	if rb.Valid {
 		t.ReversedBy = &rb.String
+	}
+	if feeNull.Valid {
+		t.Fee = &feeNull.Decimal
 	}
 	return t, err
 }
@@ -128,35 +140,44 @@ func GetTransferByID(db *sql.DB, id string) (models.Transfer, error) {
 func GetReversalByOriginalID(db *sql.DB, originalID string) (models.Transfer, error) {
 	var t models.Transfer
 	var fr, rb sql.NullString
+	var feeNull decimal.NullDecimal
 	err := db.QueryRow(`
-		SELECT id, from_account_id, to_account_id, amount, status, failure_reason, reversed_by, created_at
+		SELECT id, from_account_id, to_account_id, amount, status, failure_reason, reversed_by, fee, created_at
 		FROM transfers
 		WHERE reversed_by = $1`, originalID,
-	).Scan(&t.ID, &t.FromAccountID, &t.ToAccountID, &t.Amount, &t.Status, &fr, &rb, &t.CreatedAt)
+	).Scan(&t.ID, &t.FromAccountID, &t.ToAccountID, &t.Amount, &t.Status, &fr, &rb, &feeNull, &t.CreatedAt)
 	if fr.Valid {
 		t.FailureReason = &fr.String
 	}
 	if rb.Valid {
 		t.ReversedBy = &rb.String
+	}
+	if feeNull.Valid {
+		t.Fee = &feeNull.Decimal
 	}
 	return t, err
 }
 
 // InsertReversalTransfer inserts T2 — the reversal transfer — with reversed_by pointing to T1.
+// Reversals do not carry a fee (fee column remains NULL).
 func InsertReversalTransfer(tx *sql.Tx, fromID, toID string, amount decimal.Decimal, reversedBy string) (models.Transfer, error) {
 	var t models.Transfer
 	var fr, rb sql.NullString
+	var feeNull decimal.NullDecimal
 	err := tx.QueryRow(`
 		INSERT INTO transfers (from_account_id, to_account_id, amount, status, reversed_by)
 		VALUES ($1, $2, $3, 'COMPLETED', $4)
-		RETURNING id, from_account_id, to_account_id, amount, status, failure_reason, reversed_by, created_at`,
+		RETURNING id, from_account_id, to_account_id, amount, status, failure_reason, reversed_by, fee, created_at`,
 		fromID, toID, amount, reversedBy,
-	).Scan(&t.ID, &t.FromAccountID, &t.ToAccountID, &t.Amount, &t.Status, &fr, &rb, &t.CreatedAt)
+	).Scan(&t.ID, &t.FromAccountID, &t.ToAccountID, &t.Amount, &t.Status, &fr, &rb, &feeNull, &t.CreatedAt)
 	if fr.Valid {
 		t.FailureReason = &fr.String
 	}
 	if rb.Valid {
 		t.ReversedBy = &rb.String
+	}
+	if feeNull.Valid {
+		t.Fee = &feeNull.Decimal
 	}
 	return t, err
 }

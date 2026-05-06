@@ -37,11 +37,8 @@ func (s *TransferService) Execute(input TransferInput) (models.Transfer, error) 
 		return models.Transfer{}, ErrSameAccount
 	}
 
-	// sort account IDs — always lock lower UUID first to prevent deadlocks
-	first, second := input.FromAccountID, input.ToAccountID
-	if first > second {
-		first, second = second, first
-	}
+	fee := input.Amount.Mul(decimal.NewFromFloat(0.01))
+	totalDebit := input.Amount.Add(fee)
 
 	tx, err := s.DB.Begin()
 	if err != nil {
@@ -49,7 +46,19 @@ func (s *TransferService) Execute(input TransferInput) (models.Transfer, error) 
 	}
 	defer tx.Rollback() // no-op if already committed
 
-	// lock both rows atomically — no other transaction can read or write these rows now
+	// Lock SYSTEM first — its UUID (00000000-...) is always the lexicographic minimum,
+	// so this order is consistent across all concurrent transactions and prevents deadlocks
+	// when the fee credit races with another transfer that involves SYSTEM.
+	if _, err := repository.GetAccountForUpdate(tx, systemAccountID); err != nil {
+		return models.Transfer{}, err
+	}
+
+	// Lock from and to in sorted UUID order after SYSTEM
+	first, second := input.FromAccountID, input.ToAccountID
+	if first > second {
+		first, second = second, first
+	}
+
 	firstAcc, err := repository.GetAccountForUpdate(tx, first)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -75,9 +84,9 @@ func (s *TransferService) Execute(input TransferInput) (models.Transfer, error) 
 	}
 
 	// SYSTEM account represents external funds — its balance is allowed to go negative
-	if input.FromAccountID != systemAccountID && fromBalance.LessThan(input.Amount) {
+	if input.FromAccountID != systemAccountID && fromBalance.LessThan(totalDebit) {
 		reason := "INSUFFICIENT_FUNDS"
-		transfer, err := repository.InsertTransfer(tx, input.FromAccountID, input.ToAccountID, input.Amount, "FAILED", &reason)
+		transfer, err := repository.InsertTransfer(tx, input.FromAccountID, input.ToAccountID, input.Amount, "FAILED", &reason, nil)
 		if err != nil {
 			return models.Transfer{}, err
 		}
@@ -92,20 +101,29 @@ func (s *TransferService) Execute(input TransferInput) (models.Transfer, error) 
 	}
 
 	// insert transfer first to get its ID, which ledger entries reference
-	transfer, err := repository.InsertTransfer(tx, input.FromAccountID, input.ToAccountID, input.Amount, "COMPLETED", nil)
+	transfer, err := repository.InsertTransfer(tx, input.FromAccountID, input.ToAccountID, input.Amount, "COMPLETED", nil, &fee)
 	if err != nil {
 		return models.Transfer{}, err
 	}
-	if err := repository.InsertLedgerEntry(tx, transfer.ID, input.FromAccountID, input.Amount.Neg()); err != nil {
+	// sender is debited amount + fee
+	if err := repository.InsertLedgerEntry(tx, transfer.ID, input.FromAccountID, totalDebit.Neg()); err != nil {
 		return models.Transfer{}, err
 	}
+	// recipient receives only amount
 	if err := repository.InsertLedgerEntry(tx, transfer.ID, input.ToAccountID, input.Amount); err != nil {
 		return models.Transfer{}, err
 	}
-	if err := repository.UpdateAccountBalance(tx, input.FromAccountID, input.Amount.Neg()); err != nil {
+	// fee goes to SYSTEM
+	if err := repository.InsertLedgerEntry(tx, transfer.ID, systemAccountID, fee); err != nil {
+		return models.Transfer{}, err
+	}
+	if err := repository.UpdateAccountBalance(tx, input.FromAccountID, totalDebit.Neg()); err != nil {
 		return models.Transfer{}, err
 	}
 	if err := repository.UpdateAccountBalance(tx, input.ToAccountID, input.Amount); err != nil {
+		return models.Transfer{}, err
+	}
+	if err := repository.UpdateAccountBalance(tx, systemAccountID, fee); err != nil {
 		return models.Transfer{}, err
 	}
 	if err := repository.InsertAuditLog(tx, &transfer.ID, "TRANSFER", input.FromAccountID, input.ToAccountID, input.Amount, "SUCCESS", nil); err != nil {
